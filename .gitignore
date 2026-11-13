@@ -1,3 +1,5 @@
 .env
 output/temp/
 output/final/
+__pycache__/
+*.pyc

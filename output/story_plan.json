@@ -1,46 +1,28 @@
 {
-  "topic_slug": "ai-agents-replacing-saas-2026",
+  "topic_slug": "brave-search-api-agentic-crypto-payments",
   "is_multi_part": false,
   "episodes": [
     {
       "part_number": 1,
-      "title": "Why Traditional SaaS Apps Are Dying in 2026",
+      "title": "Brave Search API Adds Agentic Crypto Payments",
       "scenes": [
         {
           "scene_number": 1,
-          "narration": "Stop paying fifty bucks a month for ten different dashboards. In 2026, traditional SaaS is officially dying.",
-          "visual_prompt": "Isometric 3D Pixel Art, vibrant neon lighting, 9:16 vertical, a stressed pixel tech worker at a glowing desk surrounded by overwhelming floating holographic app windows and red dollar signs, dark cyberpunk studio background",
-          "sfx_cue": "glitch"
-        },
-        {
-          "scene_number": 2,
-          "narration": "For years, we clicked buttons, dragged spreadsheets, and acted like human glue between clunky apps.",
-          "visual_prompt": "Isometric 3D Pixel Art, vibrant lighting, 9:16 vertical, a tiny exhausted pixel office worker jumping across giant glowing floating puzzle pieces shaped like spreadsheets, calendars, and email icons over a digital void",
-          "sfx_cue": "click"
-        },
-        {
-          "scene_number": 3,
-          "narration": "Now, autonomous AI agents don't give you tools. They just do the entire job for you.",
-          "visual_prompt": "Isometric 3D Pixel Art, vibrant cyan and magenta lighting, 9:16 vertical, a sleek glowing futuristic AI robot agent standing on a raised tech platform, dissolving dozens of cluttered old app icons into glowing digital particles",
+          "narration": "Brave just dropped a massive update to their Search API, and AI agents can now pay for data using crypto!",
+          "visual_prompt": "Isometric 3D Pixel Art of a glowing web browser API interface connecting to a crypto wallet, vibrant cyber neon lighting, 9:16 vertical",
           "sfx_cue": "whoosh"
         },
         {
-          "scene_number": 4,
-          "narration": "Instead of opening a CRM, your agent reads the thread, updates the pipeline, and books the call automatically.",
-          "visual_prompt": "Isometric 3D Pixel Art, vibrant lighting, 9:16 vertical, miniature glowing AI pixel drones flying swiftly along neon circuit paths carrying golden data cubes between a mail hub, a database tower, and a calendar kiosk",
+          "scene_number": 2,
+          "narration": "Instead of traditional credit cards, autonomous AI agents can instantly settle micro-transactions for real-time web searches.",
+          "visual_prompt": "Isometric 3D Pixel Art of a tiny robotic AI agent handing over glowing digital coins to a search server, vibrant lighting, 9:16 vertical",
           "sfx_cue": "pop"
         },
         {
-          "scene_number": 5,
-          "narration": "Software isn't disappearing, the interface is. Every app is collapsing into a database controlled by an AI brain.",
-          "visual_prompt": "Isometric 3D Pixel Art, vibrant electric blue and gold lighting, 9:16 vertical, a massive chaotic tower of retro software menus transforming and streamlining into a single glowing crystalline AI brain connected to a sleek server core",
+          "scene_number": 3,
+          "narration": "This is the missing link for fully autonomous AI workflows. Are we entering the age of machine-to-machine economies?",
+          "visual_prompt": "Isometric 3D Pixel Art of a futuristic city grid powered by glowing crypto blocks and data streams, vibrant lighting, 9:16 vertical",
           "sfx_cue": "glitch"
-        },
-        {
-          "scene_number": 6,
-          "narration": "The winners in 2026 aren't building software for humans to click. They're building agents humans hire. Follow for more.",
-          "visual_prompt": "Isometric 3D Pixel Art, vibrant neon lighting, 9:16 vertical, a confident pixel startup founder fist-bumping a friendly glowing holographic AI agent in a bright futuristic loft with a soaring neon green growth chart behind them",
-          "sfx_cue": "pop"
         }
       ]
     }
