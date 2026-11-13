@@ -22,12 +22,32 @@ To stay within a $0 operational budget (leveraging existing free tiers), compute
 | **Word Timestamps** | `Faster-Whisper` / `FFmpeg libwhisper` | Local / Free | Word-level alignment for animated subtitles. |
 | **Visual Generation** | `Pollinations.ai API` (Primary) / `Pexels API` | Free / Unlimited | Generating 9:16 `Isometric 3D Pixel Art` images (since Google AI Studio Free Tier has `0/0` quota for Imagen/Veo). |
 | **Sound Effects (SFX)** | Local Static Assets (`soundcn` + `100-free-soundeffects`) | Open-Source / Free | Crisp UI/Game SFX stored locally in `assets/sfx/` for zero-latency FFmpeg mixing. |
-| **Video Assembly** | `Python` + `FFmpeg` (v9.0.2+) | Local / Free | Ken Burns zoom
+| **Video Assembly** | `Python` + `FFmpeg` (v9.0.2+) | Local / Free | Ken Burns zoom/pan, SFX overlay, `.ass` subtitle burn-in, 1080x1920 60fps `.mp4` export. |
 
-4. Data Schema (output/story_plan.json)
+---
+
+## 3. Project Structure
+```text
+AGV/
+├── 1_plan_story.py          # Phase 1: Trend-to-JSON script & visual prompt generator
+├── pipeline/
+│   └── 2_render_video.py    # Phase 1: TTS, Pollinations images, Whisper .ass, FFmpeg assembly
+├── assets/
+│   └── sfx/                 # Local SFX cues (glitch.mp3, click.mp3, whoosh.mp3, pop.mp3)
+├── output/
+│   ├── story_plan.json      # Generated story plan
+│   ├── temp/                # Intermediate scene audio, images, and .ass subtitles
+│   └── final/               # Rendered 1080x1920 60fps .mp4 videos
+├── requirements.txt
+└── .env
+```
+
+---
+
+## 4. Data Schema (`output/story_plan.json`)
 The script generator outputs strict JSON validated via Pydantic:
 
-JSON
+```json
 {
   "topic_slug": "ai-agents-replacing-saas-2026",
   "is_multi_part": false,
@@ -46,57 +66,47 @@ JSON
     }
   ]
 }
-5. Google Drive Naming & Organization Rules
+```
+
+---
+
+## 5. Google Drive Naming & Organization Rules
 When uploading rendered videos to Google Drive:
 
-Date Format: [dd-mm-yy] (using hyphens - instead of slashes / to avoid path conflicts).
+* **Date Format:** `[dd-mm-yy]` (using hyphens `-` instead of slashes `/` to avoid path conflicts).
+* **Single-Part Story (`is_multi_part: false`):**
+  * Upload directly as: `[dd-mm-yy] <Story Title>.mp4`
+* **Multi-Part Story (`is_multi_part: true`):**
+  * Create a dedicated parent folder: `[dd-mm-yy] <Story Title>/`
+  * Upload episodes inside as: `Part 1 - <Episode Title>.mp4`, `Part 2 - <Episode Title>.mp4`, etc.
 
-Single-Part Story (is_multi_part: false):
+---
 
-Upload directly as: [dd-mm-yy] <Story Title>.mp4
+## 6. Development Roadmap & Current Status
 
-Multi-Part Story (is_multi_part: true):
+### Phase 1: Core Video Engine (In Progress)
+- [x] Environment setup (Python + FFmpeg 9.0.2 full build verified).
+- [x] `1_plan_story.py` tested and outputting valid `story_plan.json`.
+- [ ] Populate `assets/sfx/` with `glitch`, `click`, `whoosh`, `pop` audio files.
+- [ ] Build `pipeline/2_render_video.py` to generate TTS audio, fetch 3D Pixel Art images, generate word-level `.ass` subtitles, and composite the final 1080x1920 `.mp4` via FFmpeg.
 
-Create a dedicated parent folder: [dd-mm-yy] <Story Title>/
+### Phase 2: Trend Automation & Cloud Storage
+- [ ] Build `3_trend_hunter.py` to fetch weekly US Tech/AI trends and feed them into `1_plan_story.py`.
+- [ ] Build `4_drive_uploader.py` using Google Drive & Sheets APIs (Service Account) with the `[dd-mm-yy]` naming convention.
 
-Upload episodes inside as: Part 1 - <Episode Title>.mp4, Part 2 - <Episode Title>.mp4, etc.
+### Phase 3: Serverless CI/CD Execution
+- [ ] Configure `.github/workflows/daily_factory.yml` to run the full pipeline automatically via Cron on GitHub Actions.
 
-6. Development Roadmap & Current Status
-Phase 1: Core Video Engine (In Progress)
+### Phase 4: Web Control Dashboard
+- [ ] Build a Next.js + MongoDB dashboard deployed on Vercel to track pipeline runs, preview scripts, and manually queue custom topics.
 
-[x] Environment setup (Python + FFmpeg 9.0.2 full build verified).
+---
 
-[x] 1_plan_story.py tested and outputting valid story_plan.json.
-
-[ ] Populate assets/sfx/ with glitch, click, whoosh, pop audio files.
-
-[ ] Build 2_render_video.py to generate TTS audio, fetch 3D Pixel Art images, generate word-level .ass subtitles, and composite the final 1080x1920 .mp4 via FFmpeg.
-
-Phase 2: Trend Automation & Cloud Storage
-
-[ ] Build 3_trend_hunter.py to fetch weekly US Tech/AI trends and feed them into 1_plan_story.py.
-
-[ ] Build 4_drive_uploader.py using Google Drive & Sheets APIs (Service Account) with the [dd-mm-yy] naming convention.
-
-Phase 3: Serverless CI/CD Execution
-
-[ ] Configure .github/workflows/daily_factory.yml to run the full pipeline automatically via Cron on GitHub Actions.
-
-Phase 4: Web Control Dashboard
-
-[ ] Build a Next.js + MongoDB dashboard deployed on Vercel to track pipeline runs, preview scripts, and manually queue custom topics.
-
-7. Instructions for CLI Agent
-Inspect output/story_plan.json and assets/sfx/ to verify existing assets.
-
-Implement pipeline/2_render_video.py using Python and FFmpeg:
-
-Generate scene narration using Gemini 3.8 Flash TTS (with edge-tts fallback).
-
-Download vertical 1080x1920 images from Pollinations.ai (https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&nologo=true) for each scene's visual_prompt.
-
-Apply smooth zoom/pan (Ken Burns effect) matching each scene's exact audio duration.
-
-Overlay the corresponding SFX file from assets/sfx/{sfx_cue}.mp3 at the exact start timestamp of each scene.
-
-Generate word-level animated subtitles in .ass format within safe zones and burn them into the final video.
+## 7. Instructions for CLI Agent
+1. Inspect `output/story_plan.json` and `assets/sfx/` to verify existing assets.
+2. Implement `pipeline/2_render_video.py` using Python and FFmpeg:
+   - Generate scene narration using `gemini-3.8-flash-tts` (with `edge-tts` fallback).
+   - Download vertical 1080x1920 images from Pollinations.ai (`https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&nologo=true`) for each scene's `visual_prompt`.
+   - Apply smooth zoom/pan (Ken Burns effect) matching each scene's exact audio duration.
+   - Overlay the corresponding SFX file from `assets/sfx/{sfx_cue}.mp3` at the exact start timestamp of each scene.
+   - Generate word-level animated subtitles in `.ass` format within safe zones and burn them into the final video.
