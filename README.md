@@ -29,15 +29,22 @@ To stay within a $0 operational budget (leveraging existing free tiers), compute
 ## 3. Project Structure
 ```text
 AGV/
-├── 1_plan_story.py          # Phase 1: Trend-to-JSON script & visual prompt generator
+├── main.py                      # End-to-end pipeline orchestrator (--topic, --skip-upload)
+├── config/
+│   └── style.json               # Video, audio SFX volume, and subtitle safe-zone styling
 ├── pipeline/
-│   └── 2_render_video.py    # Phase 1: TTS, Pollinations images, Whisper .ass, FFmpeg assembly
+│   ├── 1_plan_story.py          # Trend-to-JSON script & visual prompt generator
+│   ├── 2_render_video.py        # TTS, Pollinations images, Whisper .ass, FFmpeg assembly
+│   ├── 3_trend_hunter.py        # HackerNews + Reddit weekly trend hunter (gemini-4-hydrogen)
+│   └── 4_drive_uploader.py      # Google Drive & Sheets uploader (Service Account)
 ├── assets/
-│   └── sfx/                 # Local SFX cues (glitch.mp3, click.mp3, whoosh.mp3, pop.mp3)
+│   └── sfx/                     # Local SFX cues (glitch.mp3, click.mp3, whoosh.mp3, pop.mp3)
 ├── output/
-│   ├── story_plan.json      # Generated story plan
-│   ├── temp/                # Intermediate scene audio, images, and .ass subtitles
-│   └── final/               # Rendered 1080x1920 60fps .mp4 videos
+│   ├── story_plan.json          # Generated story plan
+│   ├── history.json             # Covered topics log to prevent duplicates
+│   ├── daily_log.csv            # Local fallback production log
+│   ├── temp/                    # Intermediate scene audio, images, and .ass subtitles
+│   └── final/                   # Rendered 1080x1920 60fps .mp4 videos
 ├── requirements.txt
 └── .env
 ```
@@ -88,11 +95,12 @@ When uploading rendered videos to Google Drive:
 - [x] Environment setup (Python + FFmpeg 9.0.2 full build verified).
 - [x] `1_plan_story.py` tested and outputting valid `story_plan.json`.
 - [ ] Populate `assets/sfx/` with `glitch`, `click`, `whoosh`, `pop` audio files.
-- [ ] Build `pipeline/2_render_video.py` to generate TTS audio, fetch 3D Pixel Art images, generate word-level `.ass` subtitles, and composite the final 1080x1920 `.mp4` via FFmpeg.
+- [x] Build `pipeline/2_render_video.py` to generate TTS audio, fetch 3D Pixel Art images, generate word-level `.ass` subtitles, and composite the final 1080x1920 `.mp4` via FFmpeg.
 
 ### Phase 2: Trend Automation & Cloud Storage
-- [ ] Build `3_trend_hunter.py` to fetch weekly US Tech/AI trends and feed them into `1_plan_story.py`.
-- [ ] Build `4_drive_uploader.py` using Google Drive & Sheets APIs (Service Account) with the `[dd-mm-yy]` naming convention.
+- [x] Build `pipeline/3_trend_hunter.py` to fetch weekly US Tech/AI trends and feed them into `pipeline/1_plan_story.py`.
+- [x] Build `pipeline/4_drive_uploader.py` using Google Drive & Sheets APIs (Service Account) with the `[dd-mm-yy]` naming convention.
+- [x] Build `main.py` orchestrator with `--topic` and `--skip-upload` flags.
 
 ### Phase 3: Serverless CI/CD Execution
 - [ ] Configure `.github/workflows/daily_factory.yml` to run the full pipeline automatically via Cron on GitHub Actions.

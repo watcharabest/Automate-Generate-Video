@@ -1,9 +1,12 @@
 import asyncio
+import base64
+import io
 import json
 import os
+import re
 import subprocess
 import sys
-import urllib.parse
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -12,23 +15,35 @@ import requests
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from PIL import Image, ImageFilter, ImageOps, ImageStat
 
 try:
     from faster_whisper import WhisperModel
 except (ImportError, OSError):
     WhisperModel = None
 
+try:
+    from rembg import new_session as rembg_new_session, remove as rembg_remove
+except (ImportError, OSError):
+    rembg_new_session = None
+    rembg_remove = None
+
 load_dotenv()
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 STORY_PLAN_PATH = ROOT_DIR / "output" / "story_plan.json"
+STYLE_CONFIG_PATH = ROOT_DIR / "config" / "style.json"
 TEMP_DIR = ROOT_DIR / "output" / "temp"
 FINAL_DIR = ROOT_DIR / "output" / "final"
 SFX_DIR = ROOT_DIR / "assets" / "sfx"
 
-WIDTH = 1080
-HEIGHT = 1920
-FPS = 60
+STYLE = json.loads(STYLE_CONFIG_PATH.read_text(encoding="utf-8"))
+WIDTH = STYLE["video"]["width"]
+HEIGHT = STYLE["video"]["height"]
+FPS = STYLE["video"]["fps"]
+SFX_VOLUME = STYLE["audio"]["sfx_volume"]
+VO_VOLUME = STYLE["audio"]["voiceover_volume"]
+SUB_CFG = STYLE["subtitles"]
 
 
 def run_cmd(cmd: List[str], desc: str = "") -> subprocess.CompletedProcess:
@@ -55,56 +70,44 @@ def get_audio_duration(audio_path: Path) -> float:
 
 
 def generate_tts_gemini(text: str, out_mp3: Path) -> bool:
-    """Try generating TTS via gemini-3.8-flash-tts. Returns True on success, False on failure/quota."""
+    """Try generating TTS via gemini-3.8-flash-tts Interactions API. Returns True on success."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return False
 
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
+        client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
+        interaction = client.interactions.create(
             model="gemini-3.8-flash-tts",
-            contents=text,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name="Puck"
-                        )
-                    )
-                ),
-            ),
+            input=[{
+                "type": "user_input",
+                "content": [{
+                    "type": "text",
+                    "text": text,
+                    "annotations": [{
+                        "type": "speech_metadata",
+                        "style": "energetic, clear, and engaging",
+                    }],
+                }],
+            }],
+            response_format={"type": "audio"},
+            generation_config={
+                "speech_config": [{"voice": "Puck"}]
+            },
         )
-        part = response.candidates[0].content.parts[0]
-        audio_bytes = part.inline_data.data
-        mime_type = getattr(part.inline_data, "mime_type", "") or ""
-
-        raw_path = out_mp3.with_suffix(".raw_tts")
+        audio_bytes = base64.b64decode(interaction.output_audio.data)
+        raw_path = out_mp3.with_suffix(".wav")
         raw_path.write_bytes(audio_bytes)
 
-        if "pcm" in mime_type.lower() or not audio_bytes.startswith((b"RIFF", b"ID3", b"\xff\xfb")):
-            # Gemini TTS typically returns 24kHz 16-bit mono PCM
-            run_cmd(
-                [
-                    "ffmpeg", "-y",
-                    "-f", "s16le", "-ar", "24000", "-ac", "1",
-                    "-i", str(raw_path),
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    str(out_mp3),
-                ],
-                "convert Gemini PCM to mp3",
-            )
-        else:
-            run_cmd(
-                [
-                    "ffmpeg", "-y",
-                    "-i", str(raw_path),
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    str(out_mp3),
-                ],
-                "convert Gemini audio to mp3",
-            )
+        run_cmd(
+            [
+                "ffmpeg", "-y",
+                "-i", str(raw_path),
+                "-c:a", "libmp3lame", "-b:a", "192k",
+                str(out_mp3),
+            ],
+            "convert Gemini WAV to mp3",
+        )
         raw_path.unlink(missing_ok=True)
         return True
     except Exception as exc:
@@ -118,40 +121,89 @@ async def _edge_tts_save(text: str, out_mp3: Path, voice: str = "en-US-AndrewNeu
 
 
 def generate_voiceover(text: str, out_mp3: Path) -> Path:
-    """Generate voiceover using Gemini 3.8 Flash TTS with automatic edge-tts fallback."""
-    if generate_tts_gemini(text, out_mp3):
-        print(f"  [TTS] Generated via gemini-3.8-flash-tts -> {out_mp3.name}")
-        return out_mp3
-
-    for attempt in range(1, 4):
+    """Generate voiceover using edge-tts (fast, reliable fallback while Gemini TTS quota is exhausted)."""
+    voices = ["en-US-AndrewNeural", "en-US-GuyNeural", "en-US-AriaNeural"]
+    for attempt in range(1, 6):
+        voice = voices[(attempt - 1) % len(voices)]
         try:
-            asyncio.run(_edge_tts_save(text, out_mp3))
-            print(f"  [TTS] Generated via edge-tts -> {out_mp3.name}")
+            asyncio.run(_edge_tts_save(text, out_mp3, voice=voice))
+            print(f"  [TTS] Generated via edge-tts ({voice}) -> {out_mp3.name}")
             return out_mp3
         except Exception as exc:
-            print(f"  [TTS] edge-tts attempt {attempt} failed: {exc}")
-            if attempt == 3:
+            print(f"  [TTS] edge-tts attempt {attempt} ({voice}) failed: {exc}")
+            if attempt == 5:
                 raise
+            time.sleep(2 * attempt)
     return out_mp3
 
 
+def _clean_visual_prompt(prompt: str) -> str:
+    """Remove resolution/aspect strings and append cohesive 3D Pixel Art style."""
+    cleaned = re.sub(r"\b(9:16\s*vertical|9:16|1080x1920|vertical)\b", "", prompt, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*,\s*,+", ", ", cleaned).strip(" ,")
+    return f"{cleaned}, single cohesive scene, full frame, vibrant Isometric 3D Pixel Art"
+
+
+def _validate_and_save_image(img_bytes: bytes, out_img: Path) -> bool:
+    """Validate image bytes with PIL and ensure mean brightness > 15 before saving."""
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        mean_brightness = ImageStat.Stat(img.convert("L")).mean[0]
+        if mean_brightness <= 15:
+            print(f"  [IMG] Rejected dark/blank image (brightness={mean_brightness:.1f})")
+            return False
+        img.save(out_img, format="JPEG", quality=95)
+        return True
+    except Exception as exc:
+        print(f"  [IMG] Invalid image bytes: {exc}")
+        return False
+
+
 def fetch_scene_image(prompt: str, out_img: Path) -> Path:
-    """Download 1080x1920 image from Pollinations.ai, with retry and FFmpeg fallback."""
-    encoded = urllib.parse.quote(prompt, safe="")
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width={WIDTH}&height={HEIGHT}&nologo=true"
+    """Generate image via Cloudflare Workers AI (FLUX.1 Schnell), with HF fallback."""
+    clean_prompt = _clean_visual_prompt(prompt)
 
-    for attempt in range(1, 4):
-        try:
-            resp = requests.get(url, timeout=45)
-            if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
-                out_img.write_bytes(resp.content)
-                print(f"  [IMG] Downloaded from Pollinations.ai -> {out_img.name}")
-                return out_img
-            print(f"  [IMG] Attempt {attempt} returned status {resp.status_code}")
-        except Exception as exc:
-            print(f"  [IMG] Attempt {attempt} failed: {exc}")
+    # 1. Primary: Cloudflare Workers AI
+    cf_account = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+    if cf_account and cf_token:
+        cf_url = f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/ai/run/@cf/black-forest-labs/flux-1-schnell"
+        headers = {"Authorization": f"Bearer {cf_token}"}
+        payload = {"prompt": clean_prompt}
+        for attempt in range(1, 3):
+            try:
+                resp = requests.post(cf_url, headers=headers, json=payload, timeout=60)
+                if resp.status_code == 200:
+                    ctype = resp.headers.get("content-type", "")
+                    if "application/json" in ctype:
+                        b64 = resp.json().get("result", {}).get("image", "")
+                        img_bytes = base64.b64decode(b64) if b64 else b""
+                    else:
+                        img_bytes = resp.content
+                    if img_bytes and _validate_and_save_image(img_bytes, out_img):
+                        print(f"  [IMG] Generated via Cloudflare FLUX.1 -> {out_img.name}")
+                        return out_img
+                else:
+                    print(f"  [IMG] Cloudflare attempt {attempt} returned {resp.status_code}")
+            except Exception as exc:
+                print(f"  [IMG] Cloudflare attempt {attempt} failed: {exc}")
 
-    # Fallback: generate a dark cyberpunk gradient image so rendering never breaks
+    # 2. Fallback: Hugging Face Inference API (router.huggingface.co)
+    hf_token = os.getenv("HF_TOKEN", "").strip()
+    if hf_token:
+        hf_url = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {hf_token}"}
+        for attempt in range(1, 3):
+            try:
+                resp = requests.post(hf_url, headers=headers, json={"inputs": clean_prompt}, timeout=60)
+                if resp.status_code == 200 and _validate_and_save_image(resp.content, out_img):
+                    print(f"  [IMG] Generated via HuggingFace FLUX.1 -> {out_img.name}")
+                    return out_img
+                print(f"  [IMG] HuggingFace attempt {attempt} returned {resp.status_code}")
+            except Exception as exc:
+                print(f"  [IMG] HuggingFace attempt {attempt} failed: {exc}")
+
+    # 3. Final fallback: FFmpeg dark background
     print(f"  [IMG] Using FFmpeg fallback image -> {out_img.name}")
     run_cmd(
         [
@@ -223,23 +275,59 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,78,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,180,180,500,1
+Style: Default,{SUB_CFG['font_name']},{SUB_CFG['font_size']},{SUB_CFG['primary_color']},{SUB_CFG['accent_color']},{SUB_CFG['outline_color']},{SUB_CFG['back_color']},{SUB_CFG['bold']},0,0,0,100,100,0,0,1,{SUB_CFG['outline']},{SUB_CFG['shadow']},{SUB_CFG['alignment']},{SUB_CFG['margin_l']},{SUB_CFG['margin_r']},{SUB_CFG['margin_v']},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
-    for item in words:
-        start_str = format_ass_time(item["start"])
-        end_str = format_ass_time(max(item["end"], item["start"] + 0.08))
-        # Pop-in scale animation + bright gold/cyan accent
-        word_text = item["word"].upper().replace("{", "").replace("}", "")
-        styled = r"{\fscx115\fscy115\t(0,80,\fscx100\fscy100)\c&H00D7FF&}" + word_text
+    chunk_size = 3
+    for i in range(0, len(words), chunk_size):
+        chunk = words[i : i + chunk_size]
+        start_str = format_ass_time(chunk[0]["start"])
+        end_str = format_ass_time(max(chunk[-1]["end"], chunk[0]["start"] + 0.12))
+        phrase = " ".join(w["word"] for w in chunk).upper().replace("{", "").replace("}", "")
+        styled = rf"{{\fscx112\fscy112\t(0,80,\fscx100\fscy100)\c{SUB_CFG['accent_color']}}}" + phrase
         lines.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{styled}\n")
 
     out_ass.write_text("".join(lines), encoding="utf-8")
-    print(f"  [SUB] Generated {len(words)} word-level cues -> {out_ass.name}")
+    print(f"  [SUB] Generated {len(lines) - 1} phrase cues (2-3 words) -> {out_ass.name}")
     return out_ass
+
+
+def extract_foreground_layer(
+    image_path: Path,
+    bg_out: Path,
+    fg_out: Path,
+    rembg_session: Optional[Any],
+) -> Optional[Path]:
+    """Center-crop image to 1080x1920 and extract foreground cutout if alpha is 8%-75%."""
+    img = Image.open(image_path).convert("RGB")
+    cropped = ImageOps.fit(img, (WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    cropped.save(bg_out, format="JPEG", quality=95)
+
+    if rembg_remove is None or rembg_session is None:
+        return None
+
+    try:
+        fg_rgba = rembg_remove(cropped, session=rembg_session).convert("RGBA")
+        alpha = fg_rgba.getchannel("A")
+        non_zero = sum(1 for p in alpha.getdata() if p > 128)
+        coverage = non_zero / (WIDTH * HEIGHT)
+        if 0.08 <= coverage <= 0.75:
+            # Add subtle drop shadow behind foreground cutout
+            shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+            shadow_alpha = alpha.point(lambda p: int(p * 0.45))
+            shadow.paste((0, 0, 0, 255), (10, 14), shadow_alpha)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14))
+            combined = Image.alpha_composite(shadow, fg_rgba)
+            combined.save(fg_out, format="PNG")
+            print(f"  [2.5D] Foreground mask {coverage*100:.1f}% -> {fg_out.name}")
+            return fg_out
+        print(f"  [2.5D] Mask {coverage*100:.1f}% outside 8%-75%, using Ken Burns fallback.")
+    except Exception as exc:
+        print(f"  [2.5D] rembg failed ({exc}), using Ken Burns fallback.")
+    return None
 
 
 def render_ken_burns_clip(
@@ -247,31 +335,59 @@ def render_ken_burns_clip(
     duration: float,
     out_clip: Path,
     zoom_in: bool = True,
+    rembg_session: Optional[Any] = None,
 ) -> Path:
-    """Render a 1080x1920 60fps video clip with smooth Ken Burns zoompan matching exact audio duration."""
+    """Render 1080x1920 60fps clip with 2.5D Parallax (or Ken Burns fallback) + 0.20s impact punch."""
     frames = max(1, int(round(duration * FPS)))
-    if zoom_in:
-        zoom_expr = f"min(zoom+0.0008,1.15)"
-    else:
-        zoom_expr = f"if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0008))"
+    bg_path = out_clip.with_name(out_clip.stem + "_bg.jpg")
+    fg_path = out_clip.with_name(out_clip.stem + "_fg.png")
 
+    extracted_fg = extract_foreground_layer(image_path, bg_path, fg_path, rembg_session)
+
+    if extracted_fg is not None:
+        # 2.5D Parallax: blurred/zoom-out background + floating/zoom-in foreground + 0.20s punch
+        fc = (
+            f"[0:v]scale={WIDTH}:{HEIGHT},gblur=sigma=2,scale=2160:-1,"
+            f"zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0006))':"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}[bg];"
+            f"[1:v]format=rgba,scale=2160:-1,"
+            f"zoompan=z='min(zoom+0.0007,1.12)':"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}[fg];"
+            f"[bg][fg]overlay=0:'8*sin(t*2.5)':shortest=1,"
+            f"scale=w='if(lt(t,0.20),iw*(1.06-0.30*t),iw)':h=-1:eval=frame,"
+            f"crop={WIDTH}:{HEIGHT},format=yuv420p[vout]"
+        )
+        run_cmd(
+            [
+                "ffmpeg", "-y",
+                "-loop", "1", "-i", str(bg_path),
+                "-loop", "1", "-i", str(extracted_fg),
+                "-filter_complex", fc,
+                "-map", "[vout]",
+                "-t", f"{duration:.3f}",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-r", str(FPS),
+                str(out_clip),
+            ],
+            f"2.5D parallax clip {out_clip.name}",
+        )
+        return out_clip
+
+    # Fallback: Standard Ken Burns + 0.20s impact punch
+    zoom_expr = "min(zoom+0.0008,1.15)" if zoom_in else "if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0008))"
     vf = (
         f"scale=2160:-1,"
         f"zoompan=z='{zoom_expr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
         f":d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},"
-        f"format=yuv420p"
+        f"scale=w='if(lt(t,0.20),iw*(1.06-0.30*t),iw)':h=-1:eval=frame,"
+        f"crop={WIDTH}:{HEIGHT},format=yuv420p"
     )
     run_cmd(
         [
             "ffmpeg", "-y",
-            "-loop", "1",
-            "-i", str(image_path),
+            "-loop", "1", "-i", str(bg_path),
             "-vf", vf,
             "-t", f"{duration:.3f}",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "20",
-            "-r", str(FPS),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-r", str(FPS),
             str(out_clip),
         ],
         f"Ken Burns clip {out_clip.name}",
@@ -288,15 +404,62 @@ def escape_ffmpeg_filter_path(path: Path) -> str:
     return s
 
 
-def render_episode(episode: Dict[str, Any], topic_slug: str, whisper_model: Optional[Any]) -> Path:
+def concat_videos_xfade(
+    scene_clips: List[Path],
+    scene_durations: List[float],
+    out_video: Path,
+    xfade_dur: float = 0.25,
+) -> Path:
+    """Concatenate scene clips using smooth 0.25s xfade transitions."""
+    if len(scene_clips) == 1:
+        run_cmd(["ffmpeg", "-y", "-i", str(scene_clips[0]), "-c", "copy", str(out_video)], "copy single clip")
+        return out_video
+
+    transitions = ["pixelize", "smoothleft", "smoothright", "wipeup", "fadefast"]
+    cmd = ["ffmpeg", "-y"]
+    for clip in scene_clips:
+        cmd.extend(["-i", str(clip)])
+
+    filter_parts = []
+    prev_label = "[0:v]"
+    cumulative = scene_durations[0]
+
+    for i in range(1, len(scene_clips)):
+        t_name = transitions[(i - 1) % len(transitions)]
+        offset = max(0.0, cumulative - i * xfade_dur)
+        out_label = "[vout]" if i == len(scene_clips) - 1 else f"[vx{i}]"
+        filter_parts.append(
+            f"{prev_label}[{i}:v]xfade=transition={t_name}:duration={xfade_dur:.2f}:offset={offset:.3f}{out_label}"
+        )
+        prev_label = out_label
+        cumulative += scene_durations[i]
+
+    cmd.extend([
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "[vout]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
+        str(out_video),
+    ])
+    run_cmd(cmd, "xfade concat scene videos")
+    return out_video
+
+
+def render_episode(
+    episode: Dict[str, Any],
+    topic_slug: str,
+    whisper_model: Optional[Any],
+    rembg_session: Optional[Any] = None,
+) -> Path:
     """Render a complete episode into output/final/."""
     part_num = episode["part_number"]
     scenes = episode["scenes"]
     prefix = f"{topic_slug}_part{part_num}"
+    xfade_dur = 0.25
 
     print(f"\n=== Rendering Part {part_num}: {episode['title']} ({len(scenes)} scenes) ===")
 
     scene_clips: List[Path] = []
+    scene_durations: List[float] = []
     scene_audios: List[Path] = []
     sfx_events: List[Dict[str, Any]] = []
     scene_timings: List[Dict[str, Any]] = []
@@ -315,43 +478,39 @@ def render_episode(episode: Dict[str, Any], topic_slug: str, whisper_model: Opti
         print(f"  [DUR] {duration:.2f}s")
 
         fetch_scene_image(scene["visual_prompt"], img_path)
-        render_ken_burns_clip(img_path, duration, clip_path, zoom_in=(idx % 2 == 0))
+        render_ken_burns_clip(
+            img_path,
+            duration,
+            clip_path,
+            zoom_in=(idx % 2 == 0),
+            rembg_session=rembg_session,
+        )
 
         scene_clips.append(clip_path)
+        scene_durations.append(duration)
         scene_audios.append(audio_path)
+
+        # Adjust start timestamp for xfade overlap
+        adjusted_start = max(0.0, current_time - idx * xfade_dur)
 
         cue = (scene.get("sfx_cue") or "none").strip().lower()
         if cue != "none":
             sfx_file = SFX_DIR / f"{cue}.mp3"
             if sfx_file.exists():
-                sfx_events.append({"path": sfx_file, "start": current_time})
+                sfx_events.append({"path": sfx_file, "start": adjusted_start})
             else:
                 print(f"  [SFX] '{cue}.mp3' not found in {SFX_DIR}, skipping gracefully.")
 
         scene_timings.append({
             "narration": scene["narration"],
-            "start": current_time,
+            "start": adjusted_start,
             "duration": duration,
         })
         current_time += duration
 
-    # 1. Concatenate scene videos
-    video_list_txt = TEMP_DIR / f"{prefix}_videos.txt"
-    video_list_txt.write_text(
-        "\n".join(f"file '{p.resolve().as_posix()}'" for p in scene_clips),
-        encoding="utf-8",
-    )
+    # 1. Concatenate scene videos with 0.25s xfade transitions
     concat_video = TEMP_DIR / f"{prefix}_concat_video.mp4"
-    run_cmd(
-        [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(video_list_txt),
-            "-c", "copy",
-            str(concat_video),
-        ],
-        "concat scene videos",
-    )
+    concat_videos_xfade(scene_clips, scene_durations, concat_video, xfade_dur=xfade_dur)
 
     # 2. Concatenate scene voiceover audios
     audio_list_txt = TEMP_DIR / f"{prefix}_audios.txt"
@@ -379,13 +538,13 @@ def render_episode(episode: Dict[str, Any], topic_slug: str, whisper_model: Opti
     mixed_audio = TEMP_DIR / f"{prefix}_mixed_audio.m4a"
     if sfx_events:
         cmd = ["ffmpeg", "-y", "-i", str(concat_voice)]
-        filter_parts = ["[0:a]volume=1.0[vo]"]
+        filter_parts = [f"[0:a]volume={VO_VOLUME}[vo]"]
         mix_inputs = ["[vo]"]
         for i, ev in enumerate(sfx_events, start=1):
             cmd.extend(["-i", str(ev["path"])])
             delay_ms = int(round(ev["start"] * 1000))
             filter_parts.append(
-                f"[{i}:a]adelay={delay_ms}|{delay_ms},volume=0.35[sfx{i}]"
+                f"[{i}:a]adelay={delay_ms}|{delay_ms},volume={SFX_VOLUME}[sfx{i}]"
             )
             mix_inputs.append(f"[sfx{i}]")
         filter_parts.append(
@@ -449,8 +608,13 @@ def main() -> None:
     else:
         print("faster-whisper unavailable; using proportional word-level alignment.")
 
+    rembg_session = None
+    if rembg_new_session is not None:
+        print("Loading rembg model (isnet-general-use)...")
+        rembg_session = rembg_new_session("isnet-general-use")
+
     for episode in plan["episodes"]:
-        render_episode(episode, topic_slug, whisper_model)
+        render_episode(episode, topic_slug, whisper_model, rembg_session=rembg_session)
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ def generate_story_plan(trend_topic: str) -> dict:
     """
 
     response = client.models.generate_content(
-        model="gemini-4-hydrogen",
+        model="gemini-3.5-flash-lite",
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",

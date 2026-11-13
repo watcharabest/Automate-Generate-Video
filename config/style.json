@@ -1,0 +1,26 @@
+{
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 60
+  },
+  "audio": {
+    "sfx_volume": 0.75,
+    "voiceover_volume": 1.0
+  },
+  "subtitles": {
+    "font_name": "Arial",
+    "font_size": 78,
+    "primary_color": "&H00FFFFFF",
+    "accent_color": "&H0000D7FF",
+    "outline_color": "&H00000000",
+    "back_color": "&H80000000",
+    "bold": -1,
+    "outline": 5,
+    "shadow": 2,
+    "alignment": 2,
+    "margin_l": 180,
+    "margin_r": 180,
+    "margin_v": 500
+  }
+}
